@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'firebase_options.dart';
 import 'src/auth_gate.dart';
 
@@ -27,6 +28,7 @@ Future<void> showNotification(String title, String body) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
@@ -35,8 +37,6 @@ void main() async {
 }
 
 class ChatApp extends StatelessWidget {
-  const ChatApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(

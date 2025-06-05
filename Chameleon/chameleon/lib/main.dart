@@ -5,11 +5,17 @@ import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+// import 'package:path_provider/path_provider.dart'; // Not strictly needed for this version
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final cameras = await availableCameras();
+  if (cameras.isEmpty) {
+    print('No cameras found.');
+    // Handle case where no cameras are available
+    runApp(const MaterialApp(home: Scaffold(body: Center(child: Text('No cameras found.')))));
+    return;
+  }
   runApp(MyApp(camera: cameras.first));
 }
 
@@ -42,6 +48,7 @@ class _CameraScreenState extends State<CameraScreen> {
   Color _dominantColor = Colors.black;
   Timer? _timer;
   bool _isProcessing = false;
+  bool _isCameraInitialized = false;
 
   @override
   void initState() {
@@ -53,15 +60,32 @@ class _CameraScreenState extends State<CameraScreen> {
     _controller = CameraController(
       widget.camera,
       ResolutionPreset.medium,
+      enableAudio: false, // Audio is not needed for this app
     );
 
-    await _controller.initialize();
-    _startColorCapture();
+    try {
+      await _controller.initialize();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _isCameraInitialized = true;
+      });
+      _startColorCapture();
+    } on CameraException catch (e) {
+      print('Error initializing camera: $e');
+      // Handle camera initialization errors
+      setState(() {
+        _isCameraInitialized = false;
+      });
+    }
   }
 
   void _startColorCapture() {
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) async {
-      if (!_isProcessing) {
+    // Adjusted interval for potentially smoother updates, but be mindful of API usage.
+    // If you need more frequent updates, consider processing frames directly on the device.
+    _timer = Timer.periodic(const Duration(milliseconds: 500), (timer) async { // Capture every 0.5 seconds
+      if (!_isProcessing && _controller.value.isInitialized) {
         _isProcessing = true;
         await _captureAndProcessFrame();
         _isProcessing = false;
@@ -71,53 +95,72 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Future<void> _captureAndProcessFrame() async {
     try {
-      final image = await _controller.takePicture();
+      final XFile image = await _controller.takePicture();
       final File imageFile = File(image.path);
       final Uint8List imageBytes = await imageFile.readAsBytes();
 
       final color = await _getDominantColor(imageBytes);
-      setState(() => _dominantColor = color);
+      if (mounted) {
+        setState(() => _dominantColor = color);
+      }
     } catch (e) {
-      print('Error capturing frame: $e');
+      print('Error capturing or processing frame: $e');
     }
   }
 
   Future<Color> _getDominantColor(Uint8List imageBytes) async {
     final uri = Uri.parse('https://chameleonapp.onrender.com/detect/');
     final request = http.MultipartRequest('POST', uri)
-      ..files.add(http.MultipartFile.fromBytes('file', imageBytes));
+      ..files.add(http.MultipartFile.fromBytes('file', imageBytes, filename: 'image.jpg')); // Added filename
 
     try {
       final response = await request.send();
       if (response.statusCode == 200) {
         final body = await response.stream.bytesToString();
         final jsonResponse = jsonDecode(body);
-        return Color.fromRGBO(
-          jsonResponse['r'],
-          jsonResponse['g'],
-          jsonResponse['b'],
-          1.0,
-        );
+        // Ensure values are integers and within 0-255 range
+        final r = (jsonResponse['r'] as int).clamp(0, 255);
+        final g = (jsonResponse['g'] as int).clamp(0, 255);
+        final b = (jsonResponse['b'] as int).clamp(0, 255);
+        return Color.fromRGBO(r, g, b, 1.0);
+      } else {
+        print('API Error: ${response.statusCode} - ${response.reasonPhrase}');
+        final errorBody = await response.stream.bytesToString();
+        print('Error Body: $errorBody');
       }
-      return Colors.black;
+      return Colors.black; // Return black on API error
     } catch (e) {
-      print('Error getting dominant color: $e');
-      return Colors.black;
+      print('Error getting dominant color from API: $e');
+      return Colors.black; // Return black on network or parsing error
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_isCameraInitialized) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
     return Scaffold(
       body: Stack(
         children: [
-          if (_controller.value.isInitialized)
-            CameraPreview(_controller),
-          Container(
-            color: _dominantColor.withOpacity(0.7),
+          // Camera Preview
+          Positioned.fill(
+            child: AspectRatio(
+              aspectRatio: _controller.value.aspectRatio,
+              child: CameraPreview(_controller),
+            ),
           ),
-          if (!_controller.value.isInitialized)
-            const Center(child: CircularProgressIndicator()),
+          // Dominant color overlay
+          Positioned.fill(
+            child: Container(
+              color: _dominantColor.withOpacity(0.7), // Adjust opacity as needed
+            ),
+          ),
         ],
       ),
     );
